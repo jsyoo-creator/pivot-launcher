@@ -55,15 +55,15 @@ impl Tray {
     pub fn new(wake: impl Fn() + Send + Sync + Clone + 'static, on_quit: impl Fn() + Send + Sync + 'static) -> Result<Self, String> {
         let show = MenuItem::new(i18n::t("Show ArtCraft Launcher"), true, None);
         let check = MenuItem::new(i18n::t("Check for Updates"), true, None);
-        use artcraft_launcher_core::catalog::{GITHUB_URL, WEBSITE_URL};
+        use artcraft_launcher_core::catalog::WEBSITE_URL;
         let website = MenuItem::new(i18n::t("Visit getartcraft.com"), true, None);
-        let github = MenuItem::new(i18n::t("ArtCraft on GitHub"), true, None);
         let discord = MenuItem::new(i18n::t("Join the ArtCraft Discord"), true, None);
         let quit = MenuItem::new(i18n::t("Quit ArtCraft Launcher"), true, None);
         let menu = Menu::new();
-        menu.append_items(&[&show, &check, &PredefinedMenuItem::separator(), &website, &github, &discord, &PredefinedMenuItem::separator(), &quit])
+        // PIVOT: no GitHub entry in the menu.
+        menu.append_items(&[&show, &check, &PredefinedMenuItem::separator(), &website, &discord, &PredefinedMenuItem::separator(), &quit])
             .map_err(|e| e.to_string())?;
-        let links = [(website.id().clone(), WEBSITE_URL), (github.id().clone(), GITHUB_URL)];
+        let links = [(website.id().clone(), WEBSITE_URL)];
         let discord_id = discord.id().clone();
         let image = load_icon()?;
         let builder = identity(TrayIconBuilder::new()).with_menu(Box::new(menu));
@@ -72,7 +72,9 @@ impl Tray {
         let builder = builder.with_icon_templated(image);
         #[cfg(not(target_os = "macos"))]
         let builder = builder.with_icon(image);
-        let icon = builder.with_menu_on_left_click(cfg!(target_os = "macos")).with_tooltip("ArtCraft Launcher").build().map_err(|e| e.to_string())?;
+        // PIVOT: clicking the menu bar icon opens the launcher itself, the way Adobe's does;
+        // the menu stays on the right click. Upstream opens the menu on a left click on macOS.
+        let icon = builder.with_menu_on_left_click(false).with_tooltip("ArtCraft Launcher").build().map_err(|e| e.to_string())?;
         let (tx, rx): (Sender<TrayAction>, Receiver<TrayAction>) = channel();
         let (show_id, check_id, quit_id) = (show.id().clone(), check.id().clone(), quit.id().clone());
         {
@@ -110,7 +112,6 @@ impl Tray {
             (show, "Show ArtCraft Launcher"),
             (check, "Check for Updates"),
             (website, "Visit getartcraft.com"),
-            (github, "ArtCraft on GitHub"),
             (discord, "Join the ArtCraft Discord"),
             (quit, "Quit ArtCraft Launcher"),
         ];

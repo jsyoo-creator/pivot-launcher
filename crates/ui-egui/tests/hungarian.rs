@@ -166,12 +166,13 @@ fn check_settings_layout() {
         assert!(theme.bottom() < done.top(), "appearance controls must scroll above the fixed actions");
         h.get_by_label("Csatlakozás a Discordhoz").scroll_to_me();
         h.run_steps(8);
-        // The footer has the same services, and the cards behind the modal have Webhely and GitHub
-        // links as one 14px line of text; keep only the settings body's buttons (34px) and icons (24px).
+        // The footer has the same services, and the cards behind the modal show their version as one
+        // 14px line of text; keep only the settings body's buttons (34px) and icons (24px).
+        // PIVOT: no GitHub link anywhere in the launcher, so it is not in this row either.
         let discord = h.get_by_label("Csatlakozás a Discordhoz").rect();
         assert!(screen.contains_rect(discord), "community links must be reachable by scrolling");
         let mut links = vec![discord];
-        for label in ["Webhely", "GitHub", "X", "Instagram", "LinkedIn", "YouTube", "TikTok"] {
+        for label in ["Webhely", "X", "Instagram", "LinkedIn", "YouTube", "TikTok"] {
             let candidates: Vec<_> = h
                 .query_all_by_label(label)
                 .map(|n| n.rect())

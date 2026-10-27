@@ -26,12 +26,21 @@ pub struct CraftApp {
     pub former_ids: &'static [&'static str],
     /// Older display names its installers registered (PdfCraft's MSI said PrintCraft until 0.2.1).
     pub former_names: &'static [&'static str],
+    /// PIVOT: the bundle-id domain (`ai.storyteller` for the Craft apps, ours for our add-ons).
+    pub bundle_domain: &'static str,
+    /// PIVOT: for one of our add-ons, the Craft app it sits on (`photocraft`). `None` for a Craft app.
+    pub addon_of: Option<&'static str>,
 }
 
 impl CraftApp {
     /// `ai.storyteller.<id>`: macOS bundle id, Flatpak id and Linux desktop-file id.
     pub fn bundle_id(&self) -> String {
-        format!("ai.storyteller.{}", self.id)
+        format!("{}.{}", self.bundle_domain, self.id)
+    }
+
+    /// PIVOT: one of our add-ons rather than a Craft app.
+    pub fn is_addon(&self) -> bool {
+        self.addon_of.is_some()
     }
 
     pub fn releases_url(&self) -> String {
@@ -58,7 +67,7 @@ impl CraftApp {
     }
 
     pub fn by_id(id: &str) -> Option<&'static CraftApp> {
-        SUITE.iter().find(|a| a.id == id)
+        all().find(|a| a.id == id)
     }
 }
 
@@ -69,7 +78,55 @@ const fn app(
     [color, ink_light, ink_dark]: [[u8; 3]; 3],
     repo: &'static str,
 ) -> CraftApp {
-    CraftApp { id, name, tagline, color, ink_light, ink_dark, repo, former_ids: &[], former_names: &[] }
+    CraftApp {
+        id,
+        name,
+        tagline,
+        color,
+        ink_light,
+        ink_dark,
+        repo,
+        former_ids: &[],
+        former_names: &[],
+        bundle_domain: "ai.storyteller",
+        addon_of: None,
+    }
+}
+
+/// PIVOT: the bundle-id domain of our own add-ons and of PIVOT Launcher.
+pub const PIVOT_BUNDLE_DOMAIN: &str = "kr.pivotcreative";
+/// PIVOT: the GitHub account our add-ons and PIVOT Launcher are released from.
+pub const PIVOT_GITHUB_OWNER: &str = "jsyoo-creator";
+
+/// PIVOT: an add-on of ours that sits on a Craft app. Released from our GitHub account; each
+/// release carries a `compat.json` saying which versions of the Craft app it works with.
+const fn addon(
+    id: &'static str,
+    name: &'static str,
+    tagline: &'static str,
+    colors: [[u8; 3]; 3],
+    repo: &'static str,
+    base: &'static str,
+) -> CraftApp {
+    let mut a = app(id, name, tagline, colors, repo);
+    a.bundle_domain = PIVOT_BUNDLE_DOMAIN;
+    a.addon_of = Some(base);
+    a
+}
+
+/// PIVOT: our add-ons, listed after the Craft App Suite.
+pub const ADDONS: [CraftApp; 1] = [addon(
+    "photocraft-genfill",
+    "PhotoCraft GenFill",
+    "Generative fill for PhotoCraft (PIVOT)",
+    [[0x6d, 0x28, 0xd9], [0x55, 0x1c, 0xb0], [0xb4, 0x8c, 0xff]],
+    "jsyoo-creator/photocraft-genfill",
+    "photocraft",
+)];
+
+/// Every app the launcher shows: the Craft App Suite, then our add-ons.
+pub fn all() -> impl Iterator<Item = &'static CraftApp> {
+    SUITE.iter().chain(ADDONS.iter())
 }
 
 /// The Craft App Suite, in display order matching getartcraft.com:

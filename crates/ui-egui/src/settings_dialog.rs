@@ -329,15 +329,12 @@ impl LauncherUi {
             ui.label(RichText::new(tl!("Questions, ideas and news from the ArtCraft team")).color(t.muted));
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                use artcraft_launcher_core::catalog::{GITHUB_URL, WEBSITE_URL};
+                use artcraft_launcher_core::catalog::WEBSITE_URL;
                 if widgets::button(ui, tl!("Join the Discord"), Kind::Primary, 0.0).on_hover_text(self.discord_url).clicked() {
                     widgets::open_external_link(ui.ctx(), self.discord_url);
                 }
                 if widgets::button(ui, tl!("Website"), Kind::Secondary, 0.0).on_hover_text(WEBSITE_URL).clicked() {
                     widgets::open_external_link(ui.ctx(), WEBSITE_URL);
-                }
-                if widgets::button(ui, tl!("GitHub"), Kind::Secondary, 0.0).on_hover_text(GITHUB_URL).clicked() {
-                    widgets::open_external_link(ui.ctx(), GITHUB_URL);
                 }
                 // Wrap the social links as a group so their icons stay together.
                 let width = widgets::icon_links_width(artcraft_launcher_core::catalog::SOCIAL.len(), 16.0);

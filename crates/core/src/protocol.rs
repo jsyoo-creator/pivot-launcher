@@ -228,6 +228,11 @@ pub enum Event {
         key: String,
         result: Result<Vec<u8>, String>,
     },
+    /// PIVOT: an install or update of `app` is held back, and why (`None` = free to go).
+    Hold {
+        app: String,
+        reason: Option<String>,
+    },
     CheckStarted,
     CheckFinished {
         /// Unix seconds.

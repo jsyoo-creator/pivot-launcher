@@ -12,7 +12,8 @@ pub struct Paths {
     pub cache: PathBuf,
 }
 
-const DIR: &str = if cfg!(any(target_os = "macos", target_os = "windows")) { "ArtCraft Launcher" } else { "artcraft-launcher" };
+// PIVOT: our own folder, so PIVOT Launcher never shares records with an ArtCraft Launcher on the same Mac.
+const DIR: &str = if cfg!(any(target_os = "macos", target_os = "windows")) { "PIVOT Launcher" } else { "pivot-launcher" };
 
 impl Paths {
     pub fn new() -> Result<Self, String> {
@@ -55,6 +56,11 @@ impl Paths {
 
     pub fn manifest(&self) -> PathBuf {
         self.data.join("installed.json")
+    }
+
+    /// PIVOT: the `compat.json` each installed add-on came with.
+    pub fn pivot_compat(&self) -> PathBuf {
+        self.data.join("pivot-compat.json")
     }
 
     /// The launcher's own log files (`artcraft-launcher.log` and the previous runs').

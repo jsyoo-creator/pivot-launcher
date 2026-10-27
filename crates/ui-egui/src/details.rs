@@ -318,7 +318,7 @@ impl LauncherUi {
             // The menu leaves out the links: they are the buttons right below.
             if !wide {
                 let row_w = ui.available_width();
-                ui.horizontal(|ui| self.actions_in(ui, entry, &status, row_w, false));
+                ui.horizontal(|ui| self.actions_in(ui, entry, &status, row_w));
             }
             link_buttons(ui, app);
         });
@@ -375,7 +375,7 @@ impl LauncherUi {
                 // The main button and its menu, at the right, level with the name.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.allocate_ui_with_layout(vec2(ACTION_W, theme::CONTROL_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        self.actions_in(ui, entry, status, ACTION_W, false);
+                        self.actions_in(ui, entry, status, ACTION_W);
                     });
                 });
             }
@@ -583,7 +583,8 @@ fn step_button(ui: &mut Ui, left: bool, tip: &str, t: &Tokens) -> bool {
 /// The app's links as a row of buttons each as wide as its label; the ↗ says each opens the
 /// browser, like the links on the cards.
 fn link_buttons(ui: &mut Ui, app: &CraftApp) {
-    let links = [(tl!("Website"), app.website()), (tl!("GitHub"), app.repo_url()), (tl!("Releases"), app.releases_url())];
+    // PIVOT: no GitHub button; the team opens the website or the releases page.
+    let links = [(tl!("Website"), app.website()), (tl!("Releases"), app.releases_url())];
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         for (label, url) in links {

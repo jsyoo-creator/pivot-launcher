@@ -1227,28 +1227,28 @@ fn the_uninstall_prompt_keeps_its_own_size_after_a_taller_dialog() {
 }
 
 #[test]
-/// The footer links website and GitHub, cards link only GitHub, and the table menu adds the
-/// app's website and repository.
-fn links_to_the_website_github_and_each_apps_pages() {
+/// PIVOT: the launcher links out only from its footer and an app's own page. No GitHub link
+/// anywhere, and neither a card's nor a table row's ⋯ menu opens a web page.
+fn links_to_the_website_and_each_apps_pages() {
     let (mut h, _) = harness(ViewMode::Grid, egui::Theme::Dark, true);
     h.run_steps(6);
-    // Footer: website, GitHub and Discord.
-    for label in ["Website", "GitHub", "Discord"] {
+    // Footer: website and Discord.
+    for label in ["Website", "Discord"] {
         assert!(h.query_all_by_label(label).count() >= 1, "{label}");
     }
-    // Cards: every app links to its repo and to its own page on getartcraft.com (plus the footer's).
-    let shown_cards = h.query_all_by_label("GitHub").count() - 1;
-    let shown_sites = h.query_all_by_label("Website").count() - 1;
-    assert!(shown_cards >= 13, "{shown_cards}");
-    assert_eq!(shown_sites, 0, "the cards only link to GitHub; the website is the footer's icon");
-    // The table's … menu has the app's website and GitHub repo.
+    assert_eq!(h.query_all_by_label("GitHub").count(), 0, "the launcher offers no GitHub link");
+    // Cards: no links of their own, so the footer's icon is the only website link.
+    assert_eq!(h.query_all_by_label("Website").count(), 1, "the website is the footer's icon alone");
+    // The table's … menu carries actions only.
     let (mut h, _) = harness(ViewMode::Table, egui::Theme::Dark, true);
     h.run_steps(6);
     h.get_all_by_label_contains("More actions").nth(8).unwrap().click(); // WordCraft
     h.run_steps(3);
-    h.get_by_label("GitHub repository");
-    // The footer's Website link and WordCraft's now-live one in the menu.
-    assert!(h.query_all_by_label_contains("Website").count() >= 2);
+    for label in ["All releases", "GitHub repository"] {
+        assert!(h.query_by_label(label).is_none(), "{label} must not be in the menu");
+    }
+    // The footer's icon stays the only Website link on screen.
+    assert_eq!(h.query_all_by_label("Website").count(), 1);
 }
 
 /// Clicks the `n`th widget labelled `label` and returns the URL the app asked to open.
@@ -1278,16 +1278,13 @@ fn all_opened(h: &mut Harness<'_, Option<LauncherUi>>, label: &str) -> Vec<Strin
 }
 
 #[test]
-/// Footer, card and social links open their expected pages; one card menu's All releases action
-/// opens a repository releases page.
+/// Footer, card and social links open their expected pages.
 fn links_open_the_right_pages() {
     let (mut h, _) = harness(ViewMode::Grid, egui::Theme::Dark, true);
     h.run_steps(6);
     assert_eq!(click_opens(&mut h, "Discord").as_deref(), Some("https://discord.gg/artcraft"));
-    // The footer's ArtCraft links and each card's own pages.
-    let github = all_opened(&mut h, "GitHub");
-    assert!(github.contains(&"https://github.com/storytold".to_string()), "{github:?}");
-    assert!(github.contains(&"https://github.com/storytold/photocraft".to_string()), "{github:?}");
+    // PIVOT: no GitHub link is offered, so nothing opens github.com from the footer or a card.
+    assert!(all_opened(&mut h, "GitHub").is_empty());
     let sites = all_opened(&mut h, "Website");
     assert!(sites.contains(&"https://getartcraft.com".to_string()), "{sites:?}");
     assert_eq!(sites, vec!["https://getartcraft.com".to_string()], "{sites:?}");
@@ -1297,12 +1294,10 @@ fn links_open_the_right_pages() {
     assert_eq!(click_opens(&mut h, "TikTok").as_deref(), Some("https://www.tiktok.com/@artcraft.studios"));
     assert_eq!(click_opens(&mut h, "Instagram").as_deref(), Some("https://www.instagram.com/officialartcraftstudios"));
     assert_eq!(click_opens(&mut h, "LinkedIn").as_deref(), Some("https://www.linkedin.com/company/artcraft-ai"));
-    // The … menu.
+    // PIVOT: the ⋯ menu opens no web page at all.
     h.get_all_by_label_contains("More actions").next().unwrap().click();
     h.run_steps(3);
-    // The first card is the first installed app by name.
-    let url = click_opens(&mut h, "All releases").unwrap_or_default();
-    assert!(url.starts_with("https://github.com/storytold/") && url.ends_with("/releases"), "{url}");
+    assert!(h.query_by_label("All releases").is_none());
 }
 
 /// An asset URL can come straight from GitHub's release JSON; it must not reach the opener when
@@ -1766,7 +1761,6 @@ fn clicking_a_card_opens_its_details_drawer() {
     h.get_by_label_contains("Curves and type layers · 1/4");
     // The links the page offers as buttons of their own.
     h.get_by_label("Website ↗");
-    h.get_by_label("GitHub ↗");
     h.get_by_label("Releases ↗");
     // The picture arrows wrap around, and the thumbnails jump.
     h.get_by_label("Previous picture (←)").click();
@@ -2055,12 +2049,12 @@ fn the_rate_limit_notice_never_runs_under_the_footer_links() {
         let checked = h.get_by_label_contains("Checked ").rect();
         // Cut short in a narrow window, but enough of it left to read.
         assert!(notice.width() >= 120.0 && notice.right() <= width, "{width}: notice {notice:?}");
-        // Everything on the footer's right: the website, GitHub and Discord icons and the social icons.
+        // Everything on the footer's right: the website and Discord icons and the social icons.
         let mut right = Vec::new();
-        for label in ["Website", "GitHub", "Discord", "X", "YouTube", "TikTok", "Instagram", "LinkedIn"] {
+        for label in ["Website", "Discord", "X", "YouTube", "TikTok", "Instagram", "LinkedIn"] {
             right.extend(h.query_all_by_label(label).map(|n| n.rect()).filter(|r| (r.center().y - notice.center().y).abs() < 12.0));
         }
-        assert_eq!(right.len(), 8, "{width}: {right:?}");
+        assert_eq!(right.len(), 7, "{width}: {right:?}");
         assert!(h.query_by_label_contains("Installing for").is_none(), "{width}: the footer no longer names the platform");
         for r in right {
             assert!(!r.intersects(notice), "{width}: notice {notice:?} overlaps {r:?}");
@@ -2427,7 +2421,9 @@ fn an_occupied_folder_asks_before_replacing_it() {
 #[test]
 fn a_not_installed_card_is_grey_until_the_pointer_is_over_it() {
     let (mut h, _) = harness(ViewMode::Grid, egui::Theme::Dark, true);
-    h.set_size(egui::vec2(1180.0, 1100.0));
+    // Tall enough that the card the pointer goes over is whole on screen (PIVOT: cards carry an
+    // add-on row, so they are taller than upstream's).
+    h.set_size(egui::vec2(1180.0, 1200.0));
     h.run_steps(8);
     let icon = h.get_by_label("CADCraft icon").rect();
     // The most colourful pixel in the icon: how far apart its red, green and blue are.

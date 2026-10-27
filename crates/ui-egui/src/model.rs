@@ -22,11 +22,13 @@ pub struct AppEntry {
     pub paused: Option<PausedDownload>,
     /// A finished download waiting for another try at installing it.
     pub ready: bool,
+    /// PIVOT: why installing or updating is held back (an add-on compatibility rule), if it is.
+    pub hold: Option<String>,
 }
 
 impl AppEntry {
     pub fn new(app: &'static CraftApp) -> Self {
-        Self { app, latest: None, installed: None, detected: false, job: None, origin: None, paused: None, ready: false }
+        Self { app, latest: None, installed: None, detected: false, job: None, origin: None, paused: None, ready: false, hold: None }
     }
 
     pub fn release(&self) -> Option<&Release> {

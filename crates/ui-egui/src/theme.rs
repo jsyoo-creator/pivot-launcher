@@ -332,6 +332,28 @@ fn font_definitions(cjk: Option<Lang>) -> FontDefinitions {
         stack.extend(fallback.iter().cloned());
         fonts.families.insert(family, stack);
     }
+    // PIVOT: Korean, bundled rather than taken from the system, so our own text draws the same on
+    // every machine. Subset to Hangul (no Han), which costs 4.5 MB instead of the full face's 10.
+    const NOTO_KR: &[u8] = include_bytes!("../../../assets/fonts/NotoSansKR-Hangul-Variable.ttf");
+    for (family, weight) in [
+        (FontFamily::Proportional, 400.0),
+        (medium(), 500.0),
+        (semibold(), 600.0),
+        (display(), 700.0),
+        (FontFamily::Monospace, 400.0),
+        (mono(), 500.0),
+        (mono_bold(), 700.0),
+    ] {
+        let name = format!("NotoSansKR-{weight}");
+        fonts.font_data.entry(name.clone()).or_insert_with(|| {
+            let tweak =
+                FontTweak { coords: VariationCoords::new([(*b"wght", weight)].iter().copied()), subpixel_binning: Some(false), ..Default::default() };
+            Arc::new(FontData::from_static(NOTO_KR).tweak(tweak))
+        });
+        if let Some(stack) = fonts.families.get_mut(&family) {
+            stack.insert(1.min(stack.len()), name);
+        }
+    }
     // The CJK face, behind everything else, from the system: only when asked for, as the font is
     // large.
     if let Some(lang) = cjk
@@ -453,13 +475,14 @@ mod tests {
     #[test]
     fn production_fonts_are_latin_plus_attributed_monochrome_fallbacks() {
         let fonts = font_definitions(None);
-        for expected in ["Inter", "Inter-Medium", "Inter-SemiBold", "Archivo-Display", "GeistMono", "GeistMono-Medium", "GeistMono-Bold"] {
+        let korean = ["NotoSansKR-400", "NotoSansKR-500", "NotoSansKR-600", "NotoSansKR-700"];
+        for expected in ["Inter", "Inter-Medium", "Inter-SemiBold", "Archivo-Display", "GeistMono", "GeistMono-Medium", "GeistMono-Bold"].into_iter().chain(korean) {
             assert!(fonts.font_data.contains_key(expected), "missing bundled face {expected}: {:?}", fonts.font_data.keys().collect::<Vec<_>>());
         }
         for fallback in ["Ubuntu-Light", "Hack", "egui-icons", "NotoEmoji-Regular", "emoji-icon-font"] {
             assert!(fonts.font_data.contains_key(fallback), "missing egui fallback {fallback}");
         }
-        assert_eq!(fonts.font_data.len(), 12, "unexpected extra faces: {:?}", fonts.font_data.keys().collect::<Vec<_>>());
+        assert_eq!(fonts.font_data.len(), 16, "unexpected extra faces: {:?}", fonts.font_data.keys().collect::<Vec<_>>());
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace, medium(), semibold(), display(), mono(), mono_bold()] {
             let stack = fonts.families.get(&family).unwrap_or_else(|| panic!("family {family:?} missing"));
             assert_eq!(
@@ -479,12 +502,14 @@ mod tests {
         use egui::{FontFamily, FontId};
         const DYNAMIC_TEXT: &str = concat!(
             "What's Changed: Faster exports 🚀 and fewer bugs 🐛 — New templates 🎨, ",
-            "warnings ⚠ and a celebration 🎉 — ArtCraft news: ✨ ✅ ❌ 💡 🔒"
+            "warnings ⚠ and a celebration 🎉 — ArtCraft news: ✨ ✅ ❌ 💡 🔒 — ",
+            // PIVOT: our own notices are Korean, and must draw without a system face too.
+            "PIVOT PhotoCraft GenFill이(가) 확인하지 않았어요 (지원 >=0.16.0)"
         );
         let fonts = font_definitions(None);
         assert_eq!(
             fonts.font_data.len(),
-            12,
+            16,
             "the coverage test is only meaningful for the bundled stack: {:?}",
             fonts.font_data.keys().collect::<Vec<_>>()
         );

@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use artcraft_launcher_core::catalog::{LAUNCHER, LAUNCHER_ID};
+use artcraft_launcher_core::catalog::{self, ADDONS, LAUNCHER_ID};
+use artcraft_launcher_core::pivot::{COMPAT_ASSET, COMPAT_MAX_BYTES, Compat, Gate};
 use artcraft_launcher_core::feed::{Feed, FeedAnswer};
 use artcraft_launcher_core::platform::{Arch, Os, Platform, pick_asset};
 use artcraft_launcher_core::protocol::{
@@ -84,6 +85,10 @@ struct Shared {
     feed_throttle: Mutex<FeedThrottle>,
     /// Apps whose details pictures are on their way (a second request meanwhile does nothing).
     pictures_busy: Mutex<std::collections::HashSet<&'static str>>,
+    /// PIVOT: the `compat.json` of each add-on's latest release.
+    latest_compat: Mutex<HashMap<String, Compat>>,
+    /// PIVOT: the `compat.json` each installed add-on was installed with (saved across runs).
+    installed_compat: Mutex<HashMap<String, Compat>>,
 }
 
 #[derive(Clone, Copy)]
@@ -171,6 +176,8 @@ impl NativeBackend {
             feed_throttle: Mutex::new(FeedThrottle::load(&paths.feed_throttle(), crate::now())),
             pictures_busy: Mutex::new(std::collections::HashSet::new()),
             last_check: Mutex::new(None),
+            latest_compat: Mutex::new(HashMap::new()),
+            installed_compat: Mutex::new(load_installed_compat(&paths)),
         });
         let backend = Self { shared, paths, http, source, platform: native_platform() };
         backend.replay_cache();
@@ -184,7 +191,7 @@ impl NativeBackend {
         let pre = self.options().prereleases;
         let feed = if pre { None } else { load_feed(&self.paths) };
         let now = crate::now();
-        for app in &SUITE {
+        for app in catalog::all() {
             let answer = match feed.as_ref().map(|f| f.answer(app, now)) {
                 Some(FeedAnswer::Fresh(Some(r))) => Some((LatestRelease::Found(r), Origin::ArtCraftApi)),
                 Some(FeedAnswer::Fresh(None)) => Some((LatestRelease::None, Origin::ArtCraftApi)),
@@ -222,7 +229,7 @@ impl NativeBackend {
             http::clean_downloads(&paths.downloads(), Duration::from_secs(30 * 86_400), Duration::from_secs(7 * 86_400));
             let snapshot = crate::detect::Snapshot::take();
             let manifest = shared.manifest.lock().unwrap_or_else(PoisonError::into_inner).clone();
-            for app in &SUITE {
+            for app in catalog::all() {
                 let found = crate::detect::detect(app, &manifest, &snapshot);
                 {
                     let mut map = shared.installed.lock().unwrap_or_else(PoisonError::into_inner);
@@ -234,9 +241,10 @@ impl NativeBackend {
                 shared.emit(Event::Detected { app: app.id.to_string(), installed: found });
             }
             // Downloads paused (or cut off by quitting) in an earlier run.
-            for app in &SUITE {
+            for app in catalog::all() {
                 report_partial(app, &shared, &paths, platform, &options);
             }
+            emit_holds(&shared);
             drop(busy);
         });
     }
@@ -246,7 +254,7 @@ impl NativeBackend {
     /// day old, or no answer at all), at most once an hour per app unless `force`.
     fn check(&self, force: bool) {
         let (Some(source), Some(http)) = (self.source.clone(), self.http.clone()) else {
-            for app in &SUITE {
+            for app in catalog::all() {
                 self.shared.emit(Event::Latest {
                     app: app.id.to_string(),
                     latest: LatestRelease::Failed("secure connections aren't available".into()),
@@ -274,9 +282,15 @@ impl NativeBackend {
                 shared.emit(Event::Notices { announcements: f.announcements.clone(), alerts: f.alerts.clone() });
             }
             let now = crate::now();
-            let queue = Mutex::new(SUITE.iter().chain(std::iter::once(&LAUNCHER)).collect::<Vec<&CraftApp>>());
+            // PIVOT: the launcher doesn't check for a launcher release. Upstream looks at
+            // storytold/craft-launcher, whose build would replace this one — Korean, add-ons and all
+            // — with theirs. Put `.chain(std::iter::once(&LAUNCHER))` back once our own releases are
+            // published and `catalog::LAUNCHER` points at them.
+            let queue = Mutex::new(catalog::all().collect::<Vec<&CraftApp>>());
             let sources = sweep(&queue, &mirror, feed.as_ref(), fallback, &source, &shared, &paths, pre, force, now);
             source.save();
+            refresh_compat(&http, &shared);
+            emit_holds(&shared);
             {
                 let answered = shared.answered.lock().unwrap_or_else(PoisonError::into_inner);
                 if SUITE.iter().all(|a| answered.contains(a.id)) {
@@ -285,7 +299,7 @@ impl NativeBackend {
             }
             // A newer release changes which file an install would use.
             let options = shared.options.lock().unwrap_or_else(PoisonError::into_inner).clone();
-            for app in &SUITE {
+            for app in catalog::all() {
                 report_partial(app, &shared, &paths, platform, &options);
             }
             let source_used = source_used_of(&sources);
@@ -384,7 +398,11 @@ impl NativeBackend {
                     None => map.remove(app.id),
                 };
             }
+            if app.is_addon() {
+                remember_installed_compat(app, found.is_some(), &shared, &paths);
+            }
             shared.emit(Event::Detected { app: app.id.to_string(), installed: found });
+            emit_holds(&shared);
             drop(job);
             shared.emit(Event::JobFinished { app: app.id.to_string(), result });
         });
@@ -468,6 +486,10 @@ fn run_install(
 ) -> Result<String, String> {
     if let Some(msg) = existing.and_then(|e| install::managed_elsewhere(app, e, false)) {
         return Err(msg);
+    }
+    // PIVOT: hold back an update that would break an add-on (or an add-on that doesn't fit).
+    if let Some(reason) = hold_reason(app, shared) {
+        return Err(reason);
     }
     let http = http.ok_or("secure connections aren't available on this system")?;
     let platform = platform.ok_or("this system isn't supported")?;
@@ -1093,7 +1115,7 @@ impl Backend for NativeBackend {
                 };
                 // Another package format means another file to download.
                 let options = self.options();
-                for app in &SUITE {
+                for app in catalog::all() {
                     report_partial(app, &self.shared, &self.paths, self.platform, &options);
                 }
                 if changed_pre {
@@ -1187,6 +1209,8 @@ mod tests {
             feed_ok_at: Mutex::new(None),
             feed_throttle: Mutex::new(FeedThrottle::new()),
             pictures_busy: Mutex::new(std::collections::HashSet::new()),
+            latest_compat: Mutex::new(HashMap::new()),
+            installed_compat: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1762,5 +1786,96 @@ mod tests {
             assert_eq!(claim.join().unwrap(), Err(CANCELLED.to_string()));
         });
         assert!(!restarting.load(Ordering::SeqCst));
+    }
+}
+
+
+// ── PIVOT: add-on compatibility ───────────────────────────────────────────────
+
+fn load_installed_compat(paths: &Paths) -> HashMap<String, Compat> {
+    std::fs::read_to_string(paths.pivot_compat()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// Reads each add-on's `compat.json` from its latest release, checked against the release's
+/// `SHA256SUMS.txt` like any other download.
+fn refresh_compat(http: &Http, shared: &Shared) {
+    for app in &ADDONS {
+        let release = shared.latest.lock().unwrap_or_else(PoisonError::into_inner).get(app.id).cloned();
+        let found = release.as_ref().and_then(|r| fetch_compat(http, app, r));
+        let mut map = shared.latest_compat.lock().unwrap_or_else(PoisonError::into_inner);
+        match found {
+            Some(c) => map.insert(app.id.to_string(), c),
+            None => map.remove(app.id),
+        };
+    }
+}
+
+fn fetch_compat(http: &Http, app: &CraftApp, release: &Release) -> Option<Compat> {
+    use sha2::{Digest, Sha256};
+    // The release's files all sit in one folder: GitHub's `…/releases/download/<tag>/` or the mirror's.
+    let any = release.assets.first()?;
+    let dir = &any.url[..any.url.rfind('/')? + 1];
+    let sums = http.get_text(&format!("{dir}SHA256SUMS.txt")).ok()??;
+    let want = artcraft_launcher_core::release::parse_sha256sums(&sums).into_iter().find(|(_, n)| n == COMPAT_ASSET)?.0;
+    let max = usize::try_from(COMPAT_MAX_BYTES).ok()?;
+    let bytes = http.get_bytes(&format!("{dir}{COMPAT_ASSET}"), max).ok()??;
+    if !http::hex(&Sha256::digest(&bytes)).eq_ignore_ascii_case(&want) {
+        log::warn!("{}: compat.json doesn't match SHA256SUMS.txt", app.id);
+        return None;
+    }
+    Compat::parse(std::str::from_utf8(&bytes).ok()?, app)
+}
+
+fn installed_versions(shared: &Shared) -> HashMap<String, artcraft_launcher_core::version::Version> {
+    shared
+        .installed
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .filter_map(|(id, i)| i.version.clone().map(|v| (id.clone(), v)))
+        .collect()
+}
+
+/// Why installing the latest release of `app` must wait, if it must.
+fn hold_reason(app: &CraftApp, shared: &Shared) -> Option<String> {
+    let installed = installed_versions(shared);
+    let ic = shared.installed_compat.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let lc = shared.latest_compat.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let target = shared.latest.lock().unwrap_or_else(PoisonError::into_inner).get(app.id).and_then(|r| r.version.clone());
+    let gate = Gate { installed: &installed, installed_compat: &ic, latest_compat: &lc };
+    if !app.is_addon() {
+        // Only a newer release is an update; the installed version itself never needs holding.
+        let current = installed.get(app.id);
+        if target.as_ref().is_none_or(|t| current.is_some_and(|c| !version::is_update(t, c))) {
+            return None;
+        }
+    }
+    gate.veto(app, target.as_ref())
+}
+
+/// Tells the UI which apps are held back now.
+fn emit_holds(shared: &Shared) {
+    for app in catalog::all() {
+        shared.emit(Event::Hold { app: app.id.to_string(), reason: hold_reason(app, shared) });
+    }
+}
+
+/// After an add-on job: the add-on now carries its latest release's range (or nothing, if removed).
+fn remember_installed_compat(app: &CraftApp, present: bool, shared: &Shared, paths: &Paths) {
+    let latest = shared.latest_compat.lock().unwrap_or_else(PoisonError::into_inner).get(app.id).cloned();
+    let mut map = shared.installed_compat.lock().unwrap_or_else(PoisonError::into_inner);
+    match (present, latest) {
+        (true, Some(c)) => {
+            map.insert(app.id.to_string(), c);
+        }
+        (false, _) => {
+            map.remove(app.id);
+        }
+        (true, None) => {}
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&*map)
+        && let Err(e) = crate::paths::write_atomic(&paths.pivot_compat(), text.as_bytes())
+    {
+        log::warn!("couldn't save pivot-compat.json: {e}");
     }
 }

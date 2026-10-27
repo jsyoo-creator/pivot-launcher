@@ -44,6 +44,8 @@ enum Primary {
     Open,
     Download(String),
     Unavailable(&'static str),
+    /// PIVOT: held back by an add-on compatibility rule; carries the reason.
+    Held(String),
 }
 
 /// Height of the header bar (the site's nav).
@@ -52,7 +54,10 @@ pub(crate) const HEADER_H: f32 = 48.0;
 pub(crate) const FOOTER_H: f32 = 34.0;
 
 const CARD_MIN_W: f32 = 320.0;
-const CARD_H: f32 = 314.0;
+// PIVOT: every card is one add-on row taller than upstream's 314, so a card that carries an
+// add-on has room for it and the grid still has cards of one height.
+const ADDON_ROW_H: f32 = 44.0;
+const CARD_H: f32 = 314.0 + ADDON_ROW_H;
 /// The app column's name and tagline sizes, to centre them on the icon.
 const TITLE_SIZE: f32 = 16.0;
 const TAGLINE_SIZE: f32 = 12.0;
@@ -342,13 +347,13 @@ impl LauncherUi {
             let short = fmt(tl!("GitHub limit hit; back in {min} min"), &[("min", &min)]);
             (format!("· {full}"), format!("· {short}"))
         });
-        use artcraft_launcher_core::catalog::{GITHUB_URL, SOCIAL, WEBSITE_URL};
-        // Every link is an icon, reading Website, GitHub, Discord, then the social accounts.
+        use artcraft_launcher_core::catalog::{SOCIAL, WEBSITE_URL};
+        // Every link is an icon, reading Website, Discord, then the social accounts. PIVOT: no
+        // GitHub icon — the team has no use for the repository.
         let named =
             |name: &'static str, label: &str, url: &'static str| widgets::IconLink { name, label: label.to_string(), tip: label.to_string(), url };
         let mut links = vec![
             named("Website", tl!("Website"), WEBSITE_URL),
-            named("GitHub", tl!("GitHub"), GITHUB_URL),
             widgets::IconLink {
                 name: "Discord",
                 label: tl!("Discord").to_string(),
@@ -475,15 +480,11 @@ impl LauncherUi {
             let mut strip_ui = ui.new_child(
                 egui::UiBuilder::new().max_rect(strip.shrink2(vec2(CARD_PAD, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
+            // PIVOT: no GitHub link on the card, so the version has the whole strip to itself.
             if !version.is_empty() {
-                let github_w = widgets::hud_galley(&strip_ui, &format!("{} ↗", tl!("GitHub")), t.muted).size().x;
-                let room = (strip_ui.available_width() - github_w - 16.0).max(0.0);
+                let room = strip_ui.available_width();
                 widgets::hud_elided(&mut strip_ui, &version, if in_colour { t.app_ink(app) } else { t.muted }, room);
             }
-            strip_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 16.0;
-                widgets::hud_link(ui, tl!("GitHub"), &app.repo_url());
-            });
         }
 
         let inner = Rect::from_min_max(egui::pos2(rect.left() + CARD_PAD, strip.bottom() + 18.0), rect.max - vec2(CARD_PAD, CARD_PAD));
@@ -547,7 +548,65 @@ impl LauncherUi {
         }
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             ui.horizontal(|ui| self.actions(ui, &entry, &status, inner.width()));
+            // Added after the actions, so in this bottom-up layout it sits just above them.
+            self.addon_rows(ui, app);
         });
+    }
+
+    /// PIVOT: the line a Craft app's card carries for each of our add-ons, so an add-on reads as a
+    /// part of the app it extends rather than as an app of its own. The app itself stays the
+    /// developer's, and keeps updating from them.
+    fn addon_rows(&mut self, ui: &mut Ui, base: &'static artcraft_launcher_core::CraftApp) {
+        const BUTTON_W: f32 = 92.0;
+        let t = Tokens::get(ui.ctx());
+        for addon in artcraft_launcher_core::catalog::ADDONS.iter().filter(|a| a.addon_of == Some(base.id)) {
+            let Some(entry) = self.entry(addon.id).cloned() else { continue };
+            let status = entry.status(self.platform, self.caps.manage_apps);
+            ui.add_space(ADDON_ROW_H - theme::CONTROL_H);
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(RichText::new(format!("PIVOT 추가기능 · {}", addon.name)).size(12.5).color(t.muted)).truncate());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.addon_button(ui, &entry, &status, BUTTON_W);
+                });
+            });
+        }
+    }
+
+    /// PIVOT: the one small button an add-on's line carries: install it, update it, open it, or say
+    /// why it is waiting.
+    fn addon_button(&mut self, ui: &mut Ui, entry: &AppEntry, status: &AppStatus, width: f32) {
+        let id = entry.app.id.to_string();
+        if entry.job.is_some() {
+            ui.add_enabled_ui(false, |ui| widgets::button(ui, "설치 중…", Kind::Secondary, width));
+            return;
+        }
+        if let Some(reason) = &entry.hold {
+            ui.add_enabled_ui(false, |ui| widgets::button(ui, "호환 대기", Kind::Secondary, width)).response.on_disabled_hover_text(reason);
+            return;
+        }
+        if !self.caps.manage_apps {
+            return;
+        }
+        match status {
+            AppStatus::Available => {
+                if widgets::button(ui, "설치", Kind::Secondary, width).clicked() {
+                    self.install_app(&id);
+                }
+            }
+            AppStatus::UpdateAvailable => {
+                if widgets::button(ui, "업데이트", Kind::Primary, width).clicked() {
+                    self.install_app(&id);
+                }
+            }
+            AppStatus::UpToDate | AppStatus::Installed => {
+                if widgets::button(ui, "열기", Kind::Secondary, width).clicked() {
+                    self.launch_app(&id);
+                }
+            }
+            AppStatus::NoRelease | AppStatus::Checking | AppStatus::Unavailable => {
+                ui.add_enabled_ui(false, |ui| widgets::button(ui, "준비 중", Kind::Secondary, width));
+            }
+        }
     }
 
     // ---- table ---------------------------------------------------------------------------
@@ -797,6 +856,9 @@ impl LauncherUi {
                 (_, None) => Primary::Unavailable(tl!("Not available")),
             };
         }
+        if let (Some(reason), AppStatus::Available | AppStatus::UpdateAvailable) = (&entry.hold, status) {
+            return Primary::Held(reason.clone());
+        }
         match status {
             AppStatus::Available if entry.ready => Primary::Retry(tl!("Retry install").into()),
             AppStatus::UpdateAvailable if entry.ready => {
@@ -813,12 +875,12 @@ impl LauncherUi {
 
     /// The main button (or progress) and the … menu, within `width`.
     pub(crate) fn actions(&mut self, ui: &mut Ui, entry: &AppEntry, status: &AppStatus, width: f32) {
-        self.actions_in(ui, entry, status, width, true);
+        self.actions_in(ui, entry, status, width);
     }
 
-    /// The main button and the `⋯` menu beside it. `links_in_menu` is false where the page shows
-    /// the website, GitHub and releases links as buttons of its own.
-    pub(crate) fn actions_in(&mut self, ui: &mut Ui, entry: &AppEntry, status: &AppStatus, width: f32, links_in_menu: bool) {
+    /// The main button and the `⋯` menu beside it. PIVOT: the menu carries actions only — no
+    /// links out to the web; the app's own page keeps those as buttons.
+    pub(crate) fn actions_in(&mut self, ui: &mut Ui, entry: &AppEntry, status: &AppStatus, width: f32) {
         let id = entry.app.id.to_string();
         // One square button (the menu) beside the main one.
         let gap = ui.spacing().item_spacing.x;
@@ -827,11 +889,11 @@ impl LauncherUi {
             self.job_actions(ui, entry, &id, main_w, width);
             return;
         }
-        if self.paused_actions(ui, entry, &id, status, width, links_in_menu) {
+        if self.paused_actions(ui, entry, &id, status, width) {
             return;
         }
         self.primary_button(ui, entry, &id, status, main_w);
-        self.menu(ui, entry, status, links_in_menu);
+        self.menu(ui, entry, status);
     }
 
     /// A running job's row: one progress bar, with pause and cancel while its download is under
@@ -893,7 +955,7 @@ impl LauncherUi {
     /// A paused download's row (where the launcher manages installs here): resume, then discard
     /// and the `⋯` menu — two squares and a main button. Returns `false` otherwise, so the main
     /// button shows instead.
-    fn paused_actions(&mut self, ui: &mut Ui, entry: &AppEntry, id: &str, status: &AppStatus, width: f32, links_in_menu: bool) -> bool {
+    fn paused_actions(&mut self, ui: &mut Ui, entry: &AppEntry, id: &str, status: &AppStatus, width: f32) -> bool {
         let gap = ui.spacing().item_spacing.x;
         let Some(p) = entry.paused else { return false };
         if !self.caps.manage_apps {
@@ -920,7 +982,7 @@ impl LauncherUi {
         if widgets::glyph_button(ui, widgets::Glyph::Close, tl!("Discard download")).clicked() {
             self.act_command(Command::Cancel { app: id.to_string() });
         }
-        self.menu(ui, entry, status, links_in_menu);
+        self.menu(ui, entry, status);
         true
     }
 
@@ -960,6 +1022,9 @@ impl LauncherUi {
             Primary::Unavailable(label) => {
                 ui.add_enabled_ui(false, |ui| widgets::button(ui, label, Kind::Secondary, main_w));
             }
+            Primary::Held(reason) => {
+                ui.add_enabled_ui(false, |ui| widgets::button(ui, "호환 확인 대기", Kind::Secondary, main_w)).response.on_disabled_hover_text(reason);
+            }
         }
     }
 
@@ -968,7 +1033,7 @@ impl LauncherUi {
     /// only for a kept download in a ready available/update state and cancels before installing;
     /// `links` adds the website/repository/releases rows, which the details drawer omits because it
     /// shows them as buttons.
-    fn menu(&mut self, ui: &mut Ui, entry: &AppEntry, status: &AppStatus, links: bool) {
+    fn menu(&mut self, ui: &mut Ui, entry: &AppEntry, status: &AppStatus) {
         let id = entry.app.id.to_string();
         let manage = self.caps.manage_apps;
         let reveal = self.caps.reveal_label;
@@ -990,19 +1055,6 @@ impl LauncherUi {
             }
             if !manage {
                 self.menu_downloads(ui, entry);
-            }
-            // The drawer shows the links as buttons, so its menu leaves them out (but keeps Hide).
-            if links {
-                ui.separator();
-                let link = |ui: &mut Ui, label: &str, url: String| {
-                    if ui.button(label).clicked() {
-                        widgets::open_external_link(ui.ctx(), &url);
-                        ui.close();
-                    }
-                };
-                link(ui, tl!("Website"), entry.app.website());
-                link(ui, tl!("GitHub repository"), entry.app.repo_url());
-                link(ui, tl!("All releases"), entry.app.releases_url());
             }
             self.menu_hide(ui, entry, &id);
         });

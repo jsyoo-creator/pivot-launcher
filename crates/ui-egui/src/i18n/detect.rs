@@ -20,7 +20,8 @@ pub fn detect_system_lang_in_background() {
     }
 }
 
-/// The system language (cached). English when it can't be determined.
+/// The system language (cached). PIVOT: Korean when it can't be determined, as this is our
+/// team's launcher; upstream falls back to English.
 pub fn system_lang() -> Lang {
     // Tests drive the UI by its English labels whatever the developer's locale is.
     if cfg!(test) {
@@ -60,7 +61,7 @@ fn detect_system_lang() -> Lang {
         return l;
     }
     let locales: Vec<String> = sys_locale::get_locales().collect();
-    first_supported(locales.iter().map(String::as_str)).unwrap_or(Lang::EN)
+    first_supported(locales.iter().map(String::as_str)).unwrap_or(Lang::KO)
 }
 
 /// The browser's languages arrive through [`set_system_locales`]; without them, English.

@@ -7,7 +7,7 @@ use artcraft_launcher_core::protocol::{
 };
 use artcraft_launcher_core::release::Release;
 use artcraft_launcher_core::status::AppStatus;
-use artcraft_launcher_core::{Platform, SUITE};
+use artcraft_launcher_core::Platform;
 
 use crate::i18n::set_current;
 use crate::model::AppEntry;
@@ -234,7 +234,7 @@ impl LauncherUi {
         Self {
             backend,
             settings,
-            entries: SUITE.iter().map(AppEntry::new).collect(),
+            entries: artcraft_launcher_core::catalog::all().map(AppEntry::new).collect(),
             caps,
             platform,
             checking: false,
@@ -509,6 +509,12 @@ impl LauncherUi {
                 if let Some(e) = self.entry_mut(&app) {
                     e.installed = installed;
                     e.detected = true;
+                }
+                true
+            }
+            Event::Hold { app, reason } => {
+                if let Some(e) = self.entry_mut(&app) {
+                    e.hold = reason;
                 }
                 true
             }
@@ -828,7 +834,9 @@ impl LauncherUi {
             .iter()
             .enumerate()
             .filter(|(_, e)| {
-                self.in_filter(e, self.settings.filter)
+                // PIVOT: an add-on belongs to the card of the app it extends, not to a card of its own.
+                !e.app.is_addon()
+                    && self.in_filter(e, self.settings.filter)
                     && (needle.is_empty() || e.app.name.to_lowercase().contains(&needle) || e.app.tagline.to_lowercase().contains(&needle))
             })
             .collect();
@@ -928,7 +936,8 @@ impl LauncherUi {
             Filter::Hidden => hidden,
             Filter::All => !hidden,
             Filter::Installed => !hidden && status.is_installed(),
-            Filter::Updates => !hidden && status == AppStatus::UpdateAvailable,
+            // PIVOT: a held update stays out of the count, "Update all" and auto-update.
+            Filter::Updates => !hidden && status == AppStatus::UpdateAvailable && entry.hold.is_none(),
             Filter::NotInstalled => !hidden && !status.is_installed(),
         }
     }
